@@ -34,6 +34,9 @@ go2spec pack golang.org/x/net
 -program_package_name <name>
     覆盖程序包名，适用时也覆盖源包名
 
+-provides <import-path>
+    覆盖库包的 RPM go(import/path) Provides
+
 -allow_unknown_hoster
     允许未知 hoster 参与包名生成，生成结果必须人工检查
 ```
@@ -56,6 +59,27 @@ go2spec pack golang.org/x/net
 - `program+library`，适合以程序为主，同时需要库子包的项目
 
 不传 `-type` 时，go2spec 会根据 pkg.go.dev package 元数据和本地 `go list` 输出推断类型。
+
+## 自定义 RPM Provides
+
+`-provides` 接受一个 Go import path，不包含 `go(...)` 或版本。它替换库包对外声明的
+`Provides: go(...) = %{version}`；源码中的 module 声明、Go imports、`go_import_path`、
+实际安装路径和 RPM 包名保持原有行为。未指定时仍使用原路径。
+
+例如，为公开项目 DiscordGo 声明一个自定义 RPM capability：
+
+```bash
+go2spec pack -type library -provides example.org/rpm/discordgo github.com/bwmarrin/discordgo@v0.29.0
+```
+
+生成出的 spec 将使用提供的自定义 Provides：
+
+```spec
+%define go_import_path  github.com/bwmarrin/discordgo
+Provides:       go(example.org/rpm/discordgo) = %{version}
+```
+
+源码仍安装到 `%{go_sys_gopath}/github.com/bwmarrin/discordgo`。
 
 ## 多个 module 分别选版本，合成一个 RPM
 

@@ -71,7 +71,7 @@ func getSpecAssetFilesForGopkg(gopkg string) (specAssetFiles, error) {
 }
 
 func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version string,
-	pkgType packageType, u *upstream) error {
+	pkgType packageType, u *upstream, providesPath string) error {
 
 	f, err := os.Create(filepath.Join(dir, "", openRuyiSrc+".spec"))
 	if err != nil {
@@ -107,6 +107,10 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 	if err != nil {
 		log.Printf("Could not determine repository URL for %q: %v\n", gopkg, err)
 		repoURL = "TODO"
+	}
+
+	if providesPath == "" {
+		providesPath = gopkg
 	}
 
 	// Write the spec file content
@@ -181,17 +185,17 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 	// For different package types, write different sections
 	switch pkgType {
 	case typeLibrary:
-		writeRPMLibraryPackage(f, gopkg, openRuyiLib, longdescription, rpmRuntimeDeps)
+		writeRPMLibraryPackage(f, providesPath, openRuyiLib, longdescription, rpmRuntimeDeps)
 	case typeProgram:
 		log.Printf("Nothing to do for program package.\n")
 	// TODO: what can this be used for? ExclusiveArch %%{go_arches}?
 	//	writeRPMProgramPackage(f, gopkg, openRuyiProgram, longdescription)
 	case typeLibraryProgram:
-		writeRPMLibraryPackage(f, gopkg, openRuyiLib, longdescription, rpmRuntimeDeps)
+		writeRPMLibraryPackage(f, providesPath, openRuyiLib, longdescription, rpmRuntimeDeps)
 		writeRPMProgramSubpackage(f, gopkg, openRuyiProgram, openRuyiSrc, description)
 	case typeProgramLibrary:
 		//writeRPMProgramPackage(f, gopkg, openRuyiProgram, longdescription)
-		writeRPMLibrarySubpackage(f, gopkg, openRuyiLib, openRuyiSrc, longdescription, rpmRuntimeDeps)
+		writeRPMLibrarySubpackage(f, gopkg, providesPath, openRuyiLib, openRuyiSrc, longdescription, rpmRuntimeDeps)
 	default:
 		log.Fatalf("Invalid pkgType %d in writeRPMSpec(), aborting", pkgType)
 	}
@@ -213,9 +217,9 @@ func writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, version st
 }
 
 // For library package
-func writeRPMLibraryPackage(f *os.File, gopkg, openRuyiLib, longdesc string, deps []string) {
+func writeRPMLibraryPackage(f *os.File, providesPath, openRuyiLib, longdesc string, deps []string) {
 	fmt.Fprintf(f, "\n")
-	fmt.Fprintf(f, "Provides:       go(%s) = %%{version}\n", gopkg)
+	fmt.Fprintf(f, "Provides:       go(%s) = %%{version}\n", providesPath)
 	fmt.Fprintf(f, "\n")
 	// 库包的运行时依赖
 	if len(deps) > 0 {
@@ -227,11 +231,11 @@ func writeRPMLibraryPackage(f *os.File, gopkg, openRuyiLib, longdesc string, dep
 }
 
 // For library subpackage
-func writeRPMLibrarySubpackage(f *os.File, gopkg, openRuyiLib, openRuyiSrc, longdesc string, deps []string) {
+func writeRPMLibrarySubpackage(f *os.File, gopkg, providesPath, openRuyiLib, openRuyiSrc, longdesc string, deps []string) {
 	fmt.Fprintf(f, "\n")
 	fmt.Fprintf(f, "%%package -n %s\n", openRuyiLib)
 	fmt.Fprintf(f, "Summary:        Development files of %s\n", filepath.Base(gopkg))
-	fmt.Fprintf(f, "Provides:       go(%s) = %%{version}\n", gopkg)
+	fmt.Fprintf(f, "Provides:       go(%s) = %%{version}\n", providesPath)
 	fmt.Fprintf(f, "BuildArch:      noarch\n")
 	if len(deps) > 0 {
 		for _, dep := range deps {
