@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -333,6 +334,80 @@ func TestSetRepoDependenciesSeparatesRuntimeAndTestOnly(t *testing.T) {
 	}
 	if got, want := strings.Join(u.repoDeps, ","), "github.com/runtime/dep,github.com/shared/dep,github.com/testonly/dep,github.com/testonly/dep2"; got != want {
 		t.Fatalf("repoDeps = %q, want %q", got, want)
+	}
+}
+
+func TestWriteSpecCustomProvidesPreservesImportIdentity(t *testing.T) {
+	const original = "github.com/bwmarrin/discordgo"
+	const custom = "github.com/yeongaori/discordgo-fork"
+	oldCache := pkgsiteInfoCache
+	pkgsiteInfoCache = map[string]*pkgsiteInfo{
+		original: {
+			Package: pkgsitePackage{Name: "discordgo", Synopsis: "Bindings for the Discord API"},
+			Module: pkgsiteModule{
+				Path: original, RepoURL: "https://github.com/yeongaori/discordgo-fork",
+				Readme:   &pkgsiteReadme{Filepath: "README.md", Contents: "Bindings for the Discord API."},
+				Licenses: []pkgsiteLicense{{FilePath: "LICENSE", Types: []string{"BSD-3-Clause"}}},
+			},
+		},
+	}
+	t.Cleanup(func() {
+		pkgsiteInfoCache = oldCache
+	})
+
+	for _, pkgType := range []packageType{typeLibrary, typeLibraryProgram, typeProgramLibrary} {
+		t.Run(fmt.Sprint(pkgType), func(t *testing.T) {
+			dir := t.TempDir()
+			modPath := filepath.Join(dir, "go.mod")
+			modContent := "module " + original + "\n\ngo 1.25\n"
+			if err := os.WriteFile(modPath, []byte(modContent), 0644); err != nil {
+				t.Fatal(err)
+			}
+			u := &upstream{
+				modulePath: original, repoURL: "https://github.com/yeongaori/discordgo-fork",
+				tag: "v0.29.0", compression: "gz",
+				repoDeps:    []string{"github.com/runtime/dep", "github.com/testonly/dep"},
+				repoRunDeps: []string{"github.com/runtime/dep"},
+			}
+			generate := func(provides string) string {
+				t.Helper()
+				if err := writeSpec(dir, original, "go-discordgo", "go-discordgo", "discordgo", "0.29.0", pkgType, u, provides); err != nil {
+					t.Fatal(err)
+				}
+				data, err := os.ReadFile(filepath.Join(dir, "go-discordgo.spec"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				return string(data)
+			}
+			baseline := generate("")
+			got := generate(custom)
+			oldProvides := "Provides:       go(" + original + ") = %{version}\n"
+			newProvides := "Provides:       go(" + custom + ") = %{version}\n"
+			if strings.Count(baseline, oldProvides) != 1 || strings.Count(got, newProvides) != 1 {
+				t.Fatal("expected exactly one default or custom library capability")
+			}
+			if want := strings.Replace(baseline, oldProvides, newProvides, 1); got != want {
+				t.Fatalf("custom Provides changed other spec fields:\n%s", got)
+			}
+			for _, field := range []string{
+				"%define go_import_path  " + original + "\n",
+				"%{go_sys_gopath}/%{go_import_path}\n",
+				"Source0:        https://github.com/yeongaori/discordgo-fork/archive/v0.29.0.tar.gz#/%{_name}-%{version}.tar.gz\n",
+				"BuildRequires:  go(github.com/testonly/dep)\n",
+				"Requires:       go(github.com/runtime/dep)\n",
+			} {
+				if !strings.Contains(got, field) {
+					t.Errorf("missing spec field %q", field)
+				}
+			}
+			if strings.Contains(got, oldProvides) || strings.Contains(got, "\nRequires:       go(github.com/testonly/dep)\n") {
+				t.Fatal("unexpected original Provides or test-only runtime requirement")
+			}
+			if data, err := os.ReadFile(modPath); err != nil || string(data) != modContent {
+				t.Fatalf("source go.mod changed: %q, %v", data, err)
+			}
+		})
 	}
 }
 

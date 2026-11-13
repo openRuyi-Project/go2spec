@@ -8,9 +8,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"golang.org/x/mod/modfile"
-	"golang.org/x/mod/module"
-	"golang.org/x/net/publicsuffix"
 	"io"
 	"log"
 	"net/http"
@@ -22,6 +19,10 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"golang.org/x/mod/modfile"
+	"golang.org/x/mod/module"
+	"golang.org/x/net/publicsuffix"
 )
 
 type packageType int
@@ -1025,6 +1026,12 @@ func mainPack(args []string, usage func()) int {
 		"Override the program package name, and the source package name too\n"+
 			"when appropriate, e.g. to name github.com/cli/cli as \"gh\"")
 
+	var providesPath string
+	flagSet.StringVar(&providesPath,
+		"provides",
+		"",
+		"Override the RPM go(import/path) capability for one library package")
+
 	var allowUnknownHoster bool
 	flagSet.BoolVar(&allowUnknownHoster,
 		"allow_unknown_hoster",
@@ -1054,7 +1061,7 @@ func mainPack(args []string, usage func()) int {
 	visited := make(map[string]bool)
 	flagSet.Visit(func(f *flag.Flag) { visited[f.Name] = true })
 	if visited["combine"] {
-		for _, name := range []string{"git_revision", "force_prerelease", "list", "program_package_name", "allow_unknown_hoster"} {
+		for _, name := range []string{"git_revision", "force_prerelease", "list", "program_package_name", "allow_unknown_hoster", "provides"} {
 			if visited[name] {
 				log.Printf("-%s cannot be combined with -combine", name)
 				return 1
@@ -1095,6 +1102,15 @@ func mainPack(args []string, usage func()) int {
 			return 1
 		}
 	}
+	if visited["provides"] {
+		providesPath = strings.TrimSpace(providesPath)
+		if err := module.CheckImportPath(providesPath); err != nil {
+			log.Fatalf("invalid -provides path: %v", err)
+		}
+		if listFile != "" || flagSet.NArg() != 1 {
+			log.Fatal("-provides requires exactly one package argument and cannot be combined with -list")
+		}
+	}
 
 	// A package argument or a package-list file is required.
 	if flagSet.NArg() < 1 && listFile == "" {
@@ -1122,6 +1138,9 @@ func mainPack(args []string, usage func()) int {
 	default:
 		log.Fatalf("-type=%q not recognized, aborting\n", pkgTypeString)
 	}
+	if providesPath != "" && pkgType == typeProgram {
+		log.Fatal("-provides requires a package type that includes a library")
+	}
 
 	// Now we collect all package's info into packRequest structs
 	requests, err := collectPackRequests(flagSet.Args(), listFile, gitRevision)
@@ -1130,12 +1149,12 @@ func mainPack(args []string, usage func()) int {
 	}
 
 	// Now we verify that all packages are valid
-	if err := preflightPackRequests(context.TODO(), requests, pkgType, customProgPkgName, allowUnknownHoster); err != nil {
+	if err := preflightPackRequests(context.TODO(), requests, pkgType, customProgPkgName, allowUnknownHoster, providesPath); err != nil {
 		log.Fatalf("preflight package list: %v", err)
 	}
 
 	for _, req := range requests {
-		packPackage(req.gopkg, req.revision, forcePrerelease, pkgType, customProgPkgName, allowUnknownHoster)
+		packPackage(req.gopkg, req.revision, forcePrerelease, pkgType, customProgPkgName, allowUnknownHoster, providesPath)
 	}
 	return 0
 }
@@ -1198,7 +1217,7 @@ func parsePackListFile(filename string) ([]packRequest, error) {
 	return requests, nil
 }
 
-func preflightPackRequests(ctx context.Context, requests []packRequest, pkgType packageType, customProgPkgName string, allowUnknownHoster bool) error {
+func preflightPackRequests(ctx context.Context, requests []packRequest, pkgType packageType, customProgPkgName string, allowUnknownHoster bool, providesPath string) error {
 	seenOutputDirs := make(map[string]string)
 	for _, req := range requests {
 		gopkg := strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(req.gopkg, "https://"), "http://"), "git://")
@@ -1221,6 +1240,9 @@ func preflightPackRequests(ctx context.Context, requests []packRequest, pkgType 
 			if info.Package.Name == "main" {
 				effectivePkgType = typeProgram
 			}
+		}
+		if providesPath != "" && effectivePkgType == typeProgram {
+			return fmt.Errorf("%q: -provides requires a package type that includes a library; use -type to select one", req.arg)
 		}
 		dir := nameFromGopkg(gopkg, effectivePkgType, customProgPkgName, allowUnknownHoster)
 		if previous, ok := seenOutputDirs[dir]; ok {
@@ -1269,7 +1291,7 @@ func parsePackArg(arg, defaultRevision string) (string, string, error) {
 	return arg, defaultRevision, nil
 }
 
-func packPackage(gopkg, gitRevision string, forcePrerelease bool, pkgType packageType, customProgPkgName string, allowUnknownHoster bool) {
+func packPackage(gopkg, gitRevision string, forcePrerelease bool, pkgType packageType, customProgPkgName string, allowUnknownHoster bool, providesPath string) {
 	// Remove URL scheme if present (https://, http://, git://, etc.)
 	gopkg = strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(gopkg, "https://"), "http://"), "git://")
 
@@ -1366,7 +1388,7 @@ func packPackage(gopkg, gitRevision string, forcePrerelease bool, pkgType packag
 	}
 
 	if err := writeSpec(dir, gopkg, openRuyiSrc, openRuyiLib, openRuyiProgram, u.version,
-		pkgType, u); err != nil {
+		pkgType, u, providesPath); err != nil {
 		log.Fatalf("Could not create spec file: %v\n", err)
 	}
 

@@ -34,6 +34,9 @@ go2spec pack golang.org/x/net
 -program_package_name <name>
     Override the program package name, and the source package name when appropriate
 
+-provides <import-path>
+    Override the library RPM go(import/path) Provides
+
 -allow_unknown_hoster
     Allow package-name generation for unknown hosters, Review the generated name manually
 ```
@@ -56,6 +59,28 @@ If the target package directory already exists and is not empty, go2spec aborts 
 - `program+library`, for program-first projects that also need a library subpackage
 
 When `-type` is omitted, go2spec uses pkg.go.dev package metadata and local `go list` output to infer the type.
+
+## Custom RPM Provides
+
+`-provides` accepts a Go import path without `go(...)` or a version. It replaces the
+library's `Provides: go(...) = %{version}`. Source module declarations, Go imports,
+`go_import_path`, installation paths and RPM names keep their existing behavior.
+Without the flag, the original path is used.
+
+For example, assign a custom RPM capability to the public DiscordGo project:
+
+```bash
+go2spec pack -type library -provides example.org/rpm/discordgo github.com/bwmarrin/discordgo@v0.29.0
+```
+
+The generated spec uses the specified custom Provides:
+
+```spec
+%define go_import_path  github.com/bwmarrin/discordgo
+Provides:       go(example.org/rpm/discordgo) = %{version}
+```
+
+Sources are still installed under `%{go_sys_gopath}/github.com/bwmarrin/discordgo`.
 
 ## Combine Independent Module Releases into One RPM
 
